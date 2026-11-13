@@ -1,0 +1,55 @@
+# LLM route: requests with model "openai/<name>" go to OpenAI.
+# The OpenAI key lives ONLY in the Secret "openai-secret" in this namespace.
+# setup.sh creates it from $OPENAI_API_KEY; it is never in a file or in git.
+# Clients (Hermes) send no real key; the gateway adds it on the way out.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: openai
+  namespace: agentgateway-system
+spec:
+  parentRefs:                       # attach to our Gateway's "http" listener
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: agentgateway-proxy
+    sectionName: http
+  match:
+    model: "openai/*"               # provider prefix = routing key; add anthropic/* etc. later
+  provider: OpenAI
+  policies:
+    auth:
+      secretRef:
+        name: openai-secret         # reads key "Authorization" -> sent as Bearer token to OpenAI
+    transformations:
+    - field: model                  # OpenAI wants "gpt-4.1-mini-2025-04-14", not "openai/gpt-4.1-..."
+      expression: 'llmRequest.model.stripPrefix("openai/")'
+    # Prompt guard: checks run on every request BEFORE it leaves the cluster.
+    # Inline here because an AgentgatewayPolicy cannot target an AgentgatewayModel.
+    # scope = which parts of the conversation are scanned:
+    #   SystemPrompt | Messages (user/assistant text) | ToolOutput (results returned by tools)
+    #   | ToolInput (arguments the model passed to tools). v1.7 default = first three.
+    promptGuard:
+      request:
+      # 1) PII: mask email addresses (request still goes through, OpenAI sees a placeholder).
+      #    ToolInput deliberately NOT scanned: masking rewrites tool-call arguments as one
+      #    string and can turn them into invalid JSON (per the CRD docs).
+      - regex:
+          action: Mask
+          builtins: [Email]
+        scope: [SystemPrompt, Messages, ToolOutput]
+      # 2) Secrets: reject the whole request with a clear 403. Nothing is forwarded.
+      #    All four scopes: Reject never rewrites JSON, and a key in a tool's output
+      #    (e.g. a tool that dumps env vars) or in tool arguments must not reach OpenAI either.
+      #    \b (word boundary) avoids false positives like "risk-assessment-for-quarterly-review".
+      - regex:
+          action: Reject
+          matches:
+          - '\bsk-[A-Za-z0-9_-]{20,}'       # OpenAI keys (sk-..., sk-proj-..., sk-svcacct-...)
+          - '\b(AKIA|ASIA)[0-9A-Z]{16}\b'   # AWS access key IDs (long-term AKIA, temporary ASIA)
+        scope: [SystemPrompt, Messages, ToolOutput, ToolInput]
+        response:                     # OpenAI-style JSON error so SDK clients (Hermes) show the message
+          statusCode: 403
+          headers:
+          - name: content-type
+            value: application/json
+          message: '{"error":{"message":"Blocked by platform policy: request contains a secret/credential.","type":"policy_violation","code":"secret_detected"}}'

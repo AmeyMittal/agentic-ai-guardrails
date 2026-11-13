@@ -1,0 +1,26 @@
+# DEMO VARIANT (scene agent-refused): same policy WITHOUT echo. Applied live by demo.sh,
+# then the original 32-mcp-authz.yaml is restored. Not applied by setup.sh.
+# Attached to the MCP backend, so it applies to every agent that reaches tools through it.
+#  - tools/list: each tool is checked; tools that don't match are FILTERED OUT (agent never sees them)
+#  - tools/call: a non-matching tool is REJECTED with a JSON-RPC error
+# Tools added to the server later are denied until someone adds them here.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: mcp-tool-allowlist
+  namespace: agentgateway-system          # same namespace as the backend it targets
+spec:
+  targetRefs:
+  - group: agentgateway.dev
+    kind: AgentgatewayBackend
+    name: mcp-backend
+  backend:
+    mcp:
+      authorization:
+        action: Allow                     # allowed if ANY expression matches; everything else denied
+        policy:
+          matchExpressions:               # CEL; names are unprefixed while the backend has one target
+          - 'mcp.tool.name == "get-sum"'
+          # NOT allowed (by omission): get-env (dumps env vars = secrets), gzip-file-as-resource
+          # (fetches arbitrary URLs), and every other tool.
+          # (needs JWT authentication configured, otherwise jwt.* fails closed).

@@ -1,0 +1,15 @@
+# One namespace per trust zone. Network rules (M7) are written per namespace.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agentgateway-system   # the gateway: control plane + proxy (the single control point)
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agents                # Hermes agent: untrusted, may only talk to the gateway
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tools                 # MCP servers: only the gateway may reach them

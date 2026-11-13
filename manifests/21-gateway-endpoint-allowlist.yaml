@@ -1,0 +1,26 @@
+# Endpoint allowlist for the whole Gateway (fail-closed).
+# Why: the openai/* model route also serves /v1/embeddings, /v1/responses, ...
+# and the prompt guard does not cover embeddings, so a secret could reach OpenAI there
+# (found by the M3 independent review). Instead of blocking endpoints one by one,
+# allow only what agents need. Anything else gets 403 at the gateway.
+# RULE: agents are configured for /v1/chat/completions. Widen this list only
+# deliberately, and only after proving the prompt guard covers the new path.
+# Note: startsWith("/mcp") already admits MCP subpaths like /mcp/...
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: endpoint-allowlist
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: agentgateway-proxy
+  traffic:
+    authorization:
+      action: Allow              # Allow = request must match at least one expression; otherwise denied
+      policy:
+        matchExpressions:
+        - 'request.path == "/v1/chat/completions"'   # LLM calls (prompt-guarded)
+        - 'request.path == "/v1/models"'             # read-only model list
+        - 'request.path.startsWith("/mcp")'          # MCP tool traffic (M4; tool-level rules in M5)

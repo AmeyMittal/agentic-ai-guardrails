@@ -1,0 +1,21 @@
+{
+  "captured": "before MCP authorization policy (M4)",
+  "tools": [
+    "echo",
+    "get-annotated-message",
+    "get-env",
+    "get-header-params",
+    "get-resource-links",
+    "get-resource-reference",
+    "get-structured-content",
+    "get-sum",
+    "get-tiny-image",
+    "gzip-file-as-resource",
+    "trigger-list-changed",
+    "trigger-log-messages",
+    "trigger-long-running-operation",
+    "trigger-resource-update",
+    "toggle-simulated-logging",
+    "toggle-subscriber-updates"
+  ]
+}

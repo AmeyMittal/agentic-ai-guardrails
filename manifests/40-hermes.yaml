@@ -1,0 +1,155 @@
+# Hermes agent (NousResearch hermes-agent, pinned v0.22.5) in the "agents" namespace.
+# It holds NO provider key: model + tool traffic both go to the gateway, which adds the key
+# and enforces policy. Every setting below was verified against the v0.22.5 source/image.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hermes-config
+  namespace: agents
+data:
+  config.yaml: |
+    model:
+      provider: custom                        # any OpenAI-compatible endpoint = our gateway
+      base_url: "http://agentgateway-proxy.agentgateway-system.svc.cluster.local/v1"
+      default: "openai/gpt-4.1-mini-2025-04-14"   # gateway routes openai/* to OpenAI
+      api_key: "not-used-gateway-injects-key" # dummy; the gateway overwrites Authorization
+      api_mode: chat_completions              # only /v1/chat/completions is allowlisted + guarded
+      context_length: 1047576                 # gpt-4.1-mini's real window; Hermes can't discover it
+                                              # behind a custom endpoint and would refuse (<64K)
+    model_overrides:                          # gpt-4.1-mini is NOT a reasoning model: without this the
+      custom:                                 # custom provider sends reasoning_effort=medium, OpenAI 400s,
+        "openai/gpt-4.1-mini-2025-04-14":     # and Hermes retries without it (WHAT_BROKE #9)
+          supports_reasoning: false
+        "openai/gpt-4o-mini":                 # documented fallback model, also non-reasoning
+          supports_reasoning: false
+    fallback_providers: []                    # no second route that could bypass the gateway
+    agent:
+      api_max_retries: 1                      # a gateway 403 surfaces fast instead of retrying
+      max_turns: 10                           # cost/runaway cap per task (default: unlimited)
+      auto_recovery_cycles: 0                 # gateway down -> fail fast, not ~4 min of retry waits
+                                              # (fail closed: the agent has no other route anyway)
+      # Safety net: globally strip every built-in toolset (runs last, overrides everything).
+      disabled_toolsets: [terminal, file, web, search, x_search, browser, code_execution,
+                          computer_use, vision, video, image_gen, video_gen, tts, skills,
+                          cronjob, memory, session_search, delegation, todo, clarify,
+                          kanban, connections]
+    platform_toolsets:
+      api_server: [platform_tools]            # allowlist: the API server gets ONLY our MCP server
+    mcp_servers:
+      platform_tools:
+        url: "http://agentgateway-proxy.agentgateway-system.svc.cluster.local/mcp"
+        timeout: 30                           # per tool call
+        connect_timeout: 15
+        # No tools.include filter on purpose: tool policy lives in the gateway (M5).
+        tools:
+          resources: false                    # don't register list/read_resource + list/get_prompt
+          prompts: false                      # helpers (the gateway denies them anyway; just noise)
+    tools:
+      tool_search:
+        enabled: "off"                        # expose the few MCP tools directly (no search step)
+    auxiliary:
+      title_generation:
+        model_upgrade_enabled: false          # no extra LLM call per session just for a title
+    plugins:
+      auto_update_check_hours: 0              # no outbound update checks (blocked in M7 anyway)
+    model_catalog:
+      enabled: false                          # no catalog download from nousresearch.com at boot
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hermes
+  namespace: agents
+  labels: { app: hermes }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }                # one agent, state in emptyDir: never two at once
+  selector:
+    matchLabels: { app: hermes }
+  template:
+    metadata:
+      labels: { app: hermes }
+    spec:
+      automountServiceAccountToken: false     # the agent gets no Kubernetes API credentials
+      securityContext:
+        seccompProfile: { type: RuntimeDefault }   # default syscall filter (cheap hardening)
+      volumes:
+      - name: data                            # Hermes state dir, must be writable; fresh per pod
+        emptyDir: {}
+      - name: config
+        configMap: { name: hermes-config }
+      initContainers:
+      # Copy (not mount) the config: Hermes' boot refuses symlinked files, and a mounted
+      # ConfigMap is made of symlinks. Reuses the Hermes image (already on the node).
+      - name: copy-config
+        image: nousresearch/hermes-agent:v0.22.5
+        command: ["sh", "-c", "cp /config/config.yaml /opt/data/config.yaml"]
+        resources:
+          requests: { cpu: 10m, memory: 16Mi }
+          limits:   { memory: 64Mi }
+        volumeMounts:
+        - { name: config, mountPath: /config }
+        - { name: data, mountPath: /opt/data }
+      # Wait until the gateway AND the MCP server behind it answer a real MCP `initialize`.
+      # Hermes connects to MCP once at boot and does not retry a failed first connect: after a
+      # node/Docker restart everything starts at once, and Hermes came up with NO tools
+      # (WHAT_BROKE #15). Init containers re-run whenever the pod sandbox is recreated.
+      - name: wait-for-gateway
+        image: nousresearch/hermes-agent:v0.22.5
+        command:
+        - sh
+        - -c
+        - |
+          url=http://agentgateway-proxy.agentgateway-system.svc.cluster.local/mcp
+          body='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"wait-for-gateway","version":"1"}}}'
+          for i in $(seq 1 150); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X POST "$url" \
+                   -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d "$body")
+            [ "$code" = 200 ] && { echo "gateway MCP ready (attempt $i)"; exit 0; }
+            echo "waiting for gateway MCP (attempt $i, HTTP $code)"; sleep 2
+          done
+          echo "gateway MCP not ready after 5 min"; exit 1
+        resources:
+          requests: { cpu: 10m, memory: 16Mi }
+          limits:   { memory: 64Mi }
+      containers:
+      - name: hermes
+        image: nousresearch/hermes-agent:v0.22.5
+        imagePullPolicy: IfNotPresent
+        args: ["gateway", "run"]              # keep the image's s6 entrypoint; run the gateway/API server
+        # Starts as root on purpose: the image's boot fixes /opt/data ownership, then drops to
+        # the unprivileged "hermes" user. runAsNonRoot would break it (documented trade-off).
+        env:
+        - { name: API_SERVER_ENABLED, value: "true" }
+        - { name: API_SERVER_HOST, value: "0.0.0.0" }   # reachable via the Service (port-forward for the demo)
+        - name: API_SERVER_KEY                # clients must send this bearer token (>=16 chars)
+          valueFrom:
+            secretKeyRef: { name: hermes-api-key, key: API_SERVER_KEY }
+        ports:
+        - { name: api, containerPort: 8642 }
+        volumeMounts:
+        - { name: data, mountPath: /opt/data }
+        startupProbe:                         # allow up to ~3 min for first boot
+          httpGet: { path: /health, port: api }
+          periodSeconds: 5
+          failureThreshold: 36
+        readinessProbe:
+          httpGet: { path: /health, port: api }
+          periodSeconds: 10
+        livenessProbe:
+          httpGet: { path: /health, port: api }
+          periodSeconds: 20
+          failureThreshold: 3
+        resources:
+          requests: { cpu: 100m, memory: 384Mi }   # measured ~300Mi after several tasks
+          limits:   { memory: 1Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hermes
+  namespace: agents
+spec:
+  selector: { app: hermes }
+  ports:
+  - { name: api, port: 8642, targetPort: api }

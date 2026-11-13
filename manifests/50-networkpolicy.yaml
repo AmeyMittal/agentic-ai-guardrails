@@ -1,0 +1,72 @@
+# Network lockdown (defence in depth). A NetworkPolicy that selects a pod for a direction
+# denies everything in that direction except what its rules list. Enforced by kindnet
+# (verified empirically in M1).
+#
+# 1) The agent may ONLY talk to DNS and the gateway. Even a misconfigured or manipulated agent
+#    has no other way out: no direct OpenAI, no direct MCP server, no internet.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-gateway-only
+  namespace: agents
+spec:
+  podSelector: {}                         # every pod in "agents"
+  policyTypes: [Egress]
+  egress:
+  - to:                                   # DNS lookups (kube-dns in kube-system)
+    - namespaceSelector:
+        matchLabels: { kubernetes.io/metadata.name: kube-system }
+      podSelector:
+        matchLabels: { k8s-app: kube-dns }
+    ports:
+    - { protocol: UDP, port: 53 }
+    - { protocol: TCP, port: 53 }
+  - to:                                   # the gateway proxy pods, on the port they listen on
+    - namespaceSelector:
+        matchLabels: { kubernetes.io/metadata.name: agentgateway-system }
+      podSelector:
+        matchLabels: { app.kubernetes.io/name: agentgateway-proxy }
+    ports:
+    - { protocol: TCP, port: 80 }         # pod port (Service 80 -> targetPort 80)
+---
+# 2) Only the gateway may reach the MCP tool server. Without this, ANY pod in the cluster
+#    could call get-env directly and bypass the tool policy (found by the M4/M5 review).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ingress-from-gateway-only
+  namespace: tools
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels: { kubernetes.io/metadata.name: agentgateway-system }
+      podSelector:
+        matchLabels: { app.kubernetes.io/name: agentgateway-proxy }
+    ports:
+    - { protocol: TCP, port: 3001 }
+---
+# 3) The MCP server needs no outbound access at all. Its URL-fetching tool
+#    (gzip-file-as-resource) could otherwise reach the internet / internal services.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: no-egress
+  namespace: tools
+spec:
+  podSelector: {}
+  policyTypes: [Egress]                   # no egress rules = deny all outbound
+---
+# 4) Nothing in the cluster may connect TO the agent (who can send it tasks? nobody in-cluster).
+#    Operators reach its API via `kubectl port-forward` (through the kubelet, authorized by
+#    Kubernetes RBAC) and must also present the API bearer key. Kubelet health probes still work.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ingress-deny-all
+  namespace: agents
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]                  # no ingress rules = deny all inbound

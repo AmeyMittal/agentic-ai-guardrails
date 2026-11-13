@@ -1,0 +1,8 @@
+# kind = Kubernetes IN Docker. One container acts as a single Kubernetes node.
+# Single node keeps memory low (Docker has ~5 GB). Default CNI (kindnet) is kept;
+# M1 tests whether it enforces NetworkPolicy.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: agent-gw
+nodes:
+- role: control-plane

@@ -1,0 +1,21 @@
+# Asks the agentgateway controller for a proxy listening on port 80.
+# The controller creates the proxy Deployment + Service, both named agentgateway-proxy.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: agentgateway-proxy
+  namespace: agentgateway-system
+spec:
+  gatewayClassName: agentgateway     # installed by the agentgateway Helm chart
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: All                    # routes may live in any namespace
+      kinds:                         # what may attach to this listener:
+      - group: gateway.networking.k8s.io
+        kind: HTTPRoute              #   normal HTTP routes (used for /mcp)
+      - group: agentgateway.dev
+        kind: AgentgatewayModel      #   LLM model routes (used for /v1/chat/completions)
