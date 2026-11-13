@@ -1,14 +1,14 @@
-# Demo talk track
+# Demo guide
 
 Audience: a customer's platform and security leads. About 45 minutes.
 
-## Before the call (T-30 min)
+## Before the demo
 1. Docker Desktop running. `kubectl config current-context` → `kind-agent-gw`.
-2. **Preflight:** `scripts/verify.sh all` → expect all PASS (8c "recording exists" passes once the recording is saved). **Never** run teardown/setup on demo day.
+2. **Preflight:** `scripts/verify.sh all` → expect all PASS. **Never** run teardown/setup on demo day.
    If a pod or port-forward misbehaves: `scripts/setup.sh` is safe to re-run (idempotent), and the scripts replace dead port-forwards automatically.
    **Laptop slept / Docker restarted?** Tested: after quitting and reopening Docker Desktop the cluster recovers by itself in ~70 s (Hermes waits for the gateway via its `wait-for-gateway` init step, WHAT_BROKE #15). Wait until `kubectl get pods -A` shows everything Running, then `scripts/verify.sh all`.
    **Rebuild from zero (only if the cluster is gone):** `scripts/setup.sh`, then `scripts/verify.sh all`. Took **103 s** on Nov 12 with images already cached on the Mac; **plan for 5–8 min** if Docker has to download the ~4 GB Hermes image again. Also check remaining OpenAI credit in the dashboard at T-30.
-3. Open: this file, `ARCHITECTURE.md` (diagram renders in VS Code preview / GitHub), a terminal at the repo root, and the backup recording in `recordings/`.
+3. Open: this file, `ARCHITECTURE.md` (diagram renders in VS Code preview / GitHub), and a terminal at the repo root.
 4. Optional second terminal: `scripts/demo.sh ui` → http://localhost:15000/ui/
 
 ## 1. Architecture (~10 min): `ARCHITECTURE.md`
@@ -36,7 +36,7 @@ Each scene prints what it proves, the request, the result and **the gateway's ow
 | 9 | `bypass` | "Could the agent go around? From inside its pod: OpenAI directly → no connection; MCP server directly → no connection; gateway → 200. NetworkPolicy." |
 | 10 | `logs` | "Every decision during this demo, allowed or blocked, from the gateway's access log, plus one raw unedited line. That's the audit trail." Then the UI (`scripts/demo.sh ui`) if time. If asked for the raw source: `kubectl logs -n agentgateway-system -l app.kubernetes.io/name=agentgateway-proxy --tail=3`. |
 
-**If the live demo fails:** play the recording in `recordings/`; then run single scenes (`scripts/demo.sh mask` etc.). Direct-to-gateway scenes (2–5) don't depend on the agent.
+**If the live demo fails:** run single scenes (`scripts/demo.sh mask` etc.). Direct-to-gateway scenes (2–5) don't depend on the agent.
 
 ## 3. What broke (~3 min): `WHAT_BROKE.md`
 Pick 3 stories:
@@ -75,7 +75,7 @@ Notes: quote the prompt; replies are capped at 300 tokens (`ask-gateway`); each 
 Likely questions are answered in the sections below (prompt-guard limits, MCP bypass attempts, the agent, model output → tool input, lockdown, residual paths, misconfigured server) and in `ARCHITECTURE.md` (scaling, production path).
 
 ---
-# Q&A prep (reference)
+# Technical notes and FAQ
 
 ## Model choice and fallback
 
@@ -134,7 +134,7 @@ The independent QA review tried to get past the tool allowlist (all refused, `-3
 - **Phone-home stopped:** with `model_catalog.enabled: false`, Hermes no longer fetches catalogs from openrouter.ai / nousresearch.com at boot (the M6 review found those cache files). M7's NetworkPolicy blocks any that remain.
 - **Gateway probes:** at startup Hermes probes `/props`, `/api/tags`, `/version` on the gateway to discover the model's context window. All get 404 (not allowlisted), so `model.context_length` is set explicitly.
 
-## Likely hard question: model output → tool input (found by the M6 review)
+## Model output → tool input (found by the M6 review)
 
 The reviewer asked the agent to echo `'sk-' + 'demoFAKE…'`:
 1. The user message passed: the two pieces don't match the regex.
@@ -182,7 +182,7 @@ The reviewer asked the agent to echo `'sk-' + 'demoFAKE…'`:
 - **Test harness:** `port_forward` reuses a listener only if it answers HTTP; a dead one is replaced (WHAT_BROKE #12). `teardown.sh` kills every `kubectl port-forward` on the Mac.
 - **LLM request timeout (decision):** `AgentgatewayModel.spec.policies` has no timeout field in v1.7; the only option is a Gateway-wide `traffic.timeouts`, which would also cut MCP's long-lived streaming connections. So the timeout is enforced client-side: Hermes gives up in ~1 min and reports it (`auto_recovery_cycles: 0`, WHAT_BROKE #13). Production: a per-route timeout on the LLM HTTPRoute once the model route is attached via an HTTPRoute parent.
 
-## The MCP server is *deliberately misconfigured* (say this out loud)
+## The MCP server is *deliberately misconfigured*
 
 `manifests/30-mcp-server.yaml` runs the reference MCP "everything" server with:
 - `FAKE_DB_PASSWORD=hunter2-demo`: a **fake** credential, the demo's stake.

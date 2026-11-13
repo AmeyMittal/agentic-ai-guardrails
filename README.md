@@ -55,7 +55,7 @@ scripts/setup.sh          # kind cluster → Gateway API CRDs → agentgateway �
 scripts/verify.sh all     # automated acceptance tests; prints PASS/FAIL with evidence
 scripts/demo.sh all       # all demo scenes (DEMO_PAUSE=1 to step through); or one scene, e.g. scripts/demo.sh mask
 ```
-A fresh setup takes ~2 min with cached images, 5–8 min if the ~4 GB Hermes image must be downloaded. Check 8c (backup recording) fails until a recording is saved in `recordings/`.
+A fresh setup takes ~2 min with cached images, 5–8 min if the ~4 GB Hermes image must be downloaded.
 
 ## Repo layout
 

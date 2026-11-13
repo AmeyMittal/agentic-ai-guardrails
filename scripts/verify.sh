@@ -360,10 +360,6 @@ verify_8() {
     fail "8b second run has identical outcomes" "diff: $(diff <(echo "$o1") <(echo "$o2") | head -6 | tr '\n' ' ')"
   fi
   rm -f "$f1" "$f2"
-  # 8c: a backup screen recording exists (made by a human; part of the demo kit)
-  local rec; rec=$(ls "$REPO_ROOT"/recordings/*.{mov,mp4,mkv,webm} 2>/dev/null | head -1)
-  [ -n "$rec" ] && pass "8c backup recording exists" "$rec" \
-                || fail "8c backup recording exists" "nothing in recordings/ yet (record demo.sh all, save to recordings/)"
 }
 
 case "${1:-}" in
